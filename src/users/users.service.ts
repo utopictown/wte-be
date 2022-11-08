@@ -1,34 +1,28 @@
-import { BadRequestException, Injectable, UnprocessableEntityException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { BadRequestException, Injectable, Scope, UnauthorizedException } from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { User } from './entities/user.entity';
 import * as bcrypt from 'bcrypt';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { Role, User, UserDocument } from './schemas/user.schema';
+import mongoose, { Model } from 'mongoose';
+import { RequestContext } from 'nestjs-request-context';
 
 @Injectable()
 export class UsersService {
   constructor(
-    @InjectRepository(User)
-    private usersRepository: Repository<User>,
-    private dataSource: DataSource,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectConnection() private readonly connection: mongoose.Connection,
   ) {}
 
   private response: { data: any; message: string } = { data: '', message: '' };
 
-  async create(createUserDto: CreateUserDto) {
-    const queryRunner = this.dataSource.createQueryRunner();
-
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
-
-    try {
-      const existedUser = await this.usersRepository.findOne({
-        where: { username: createUserDto.username },
-      });
+  async create(createUserDto: CreateUserDto, isStaff: boolean = false) {
+    const session = await this.connection.startSession();
+    await session.withTransaction(async () => {
+      const existedUser = await this.userModel.findOne({ username: createUserDto.username });
 
       if (existedUser)
-        return new BadRequestException({
+        throw new BadRequestException({
           ...this.response,
           message: 'username already existed',
         });
@@ -37,60 +31,56 @@ export class UsersService {
       user.username = createUserDto.username;
       user.password = await bcrypt.hash(createUserDto.password, 10);
 
-      await queryRunner.manager.save(user);
+      if (isStaff) user.roles = Role.Staff;
 
-      await queryRunner.commitTransaction();
-    } catch (error) {
-      await queryRunner.rollbackTransaction();
-
-      return new UnprocessableEntityException(error);
-    } finally {
-      await queryRunner.release();
-    }
+      await this.userModel.create(user);
+    });
 
     return { ...this.response, message: 'Successfully creating user' };
   }
 
   async findAll() {
-    const result = await this.usersRepository.find({
-      select: ['id', 'username'],
-    });
+    const result = await this.userModel.find().select('-password');
 
     return { ...this.response, data: result };
   }
 
-  async findOne(id: string) {
-    const result = await this.usersRepository.findOne({
-      where: { id },
-      select: ['id', 'username'],
-    });
+  async findOne(identifier: string, withPassword: boolean = false) {
+    let selected: { id: boolean; username: boolean; roles: boolean; password?: boolean } = {
+      id: true,
+      username: true,
+      roles: true,
+    };
+
+    let result: User;
+
+    if (withPassword) selected.password = true;
+
+    try {
+      result = await this.userModel.findOne({ _id: new mongoose.Types.ObjectId(identifier) }).select(selected);
+    } catch (error) {
+      result = await this.userModel.findOne({ username: identifier }).select(selected);
+    }
+
+    const request = RequestContext.currentContext.req;
+    if (request.user && result.username != request.user.username)
+      throw new UnauthorizedException('You dont have permission to access this resource');
 
     return { ...this.response, data: result };
   }
 
   async update(id: string, updateUserDto: UpdateUserDto) {
-    const queryRunner = this.dataSource.createQueryRunner();
+    const session = await this.connection.startSession();
 
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
-
-    try {
-      await queryRunner.manager.update(User, id, updateUserDto);
-
-      await queryRunner.commitTransaction();
-    } catch (error) {
-      await queryRunner.rollbackTransaction();
-
-      return new UnprocessableEntityException(error);
-    } finally {
-      await queryRunner.release();
-    }
+    await session.withTransaction(async () => {
+      await this.userModel.findOneAndUpdate({ _id: id }, updateUserDto);
+    });
 
     return { ...this.response, message: 'Successfully updating a user' };
   }
 
   remove(id: string) {
-    this.usersRepository.delete(id);
+    this.userModel.deleteOne({ _id: id });
 
     return { ...this.response, message: 'Successfully deleting a user' };
   }

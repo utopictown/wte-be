@@ -1,38 +1,35 @@
 import { Injectable, UnprocessableEntityException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Product } from 'src/products/entities/product.entity';
-import { User } from 'src/users/entities/user.entity';
-import { DataSource, Repository } from 'typeorm';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import mongoose, { Connection, Model } from 'mongoose';
+import { RequestContext } from 'nestjs-request-context';
+import { Product, ProductDocument } from 'src/products/schemas/product.schema';
+import { User, UserDocument } from 'src/users/schemas/user.schema';
 import { CreateWarrantyClaimDto } from './dto/create-warranty-claim.dto';
 import { UpdateWarrantyClaimDto } from './dto/update-warranty-claim.dto';
-import { WarrantyClaim } from './entities/warranty-claim.entity';
+import { WarrantyClaim, WarrantyClaimDocument } from './schemas/warranty-claim.schema';
 
 @Injectable()
 export class WarrantyClaimsService {
   constructor(
-    @InjectRepository(WarrantyClaim)
-    private warrantyClaimsRepository: Repository<WarrantyClaim>,
-    private dataSource: DataSource,
-    @InjectRepository(User)
-    private usersRepository: Repository<User>,
-    @InjectRepository(Product)
-    private productsRepository: Repository<Product>,
+    @InjectModel(WarrantyClaim.name) private warrantClaimModel: Model<WarrantyClaimDocument>,
+    @InjectModel(Product.name) private productModel: Model<ProductDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectConnection() private connection: Connection,
   ) {}
 
   private response: { data: any; message: string } = { data: '', message: '' };
 
   async create(createWarrantyDto: CreateWarrantyClaimDto) {
-    const queryRunner = this.dataSource.createQueryRunner();
+    const request = RequestContext.currentContext.req;
 
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    const session = await this.connection.startSession();
 
-    try {
-      const claimer = await this.usersRepository.findOneByOrFail({
-        id: 'd32c36f4-4efc-4dfc-a3bc-ef91865f1b93',
+    await session.withTransaction(async () => {
+      const claimer = await this.userModel.findOne({
+        _id: request.user.userId,
       });
-      const product = await this.productsRepository.findOneByOrFail({
-        id: createWarrantyDto.productId,
+      const product = await this.productModel.findOne({
+        _id: createWarrantyDto.productId,
       });
 
       const warrantyClaim = new WarrantyClaim();
@@ -40,55 +37,59 @@ export class WarrantyClaimsService {
       warrantyClaim.user = claimer;
       warrantyClaim.product = product;
 
-      await queryRunner.manager.save(warrantyClaim);
-
-      await queryRunner.commitTransaction();
-    } catch (error) {
-      await queryRunner.rollbackTransaction();
-
-      return new UnprocessableEntityException(error);
-    } finally {
-      await queryRunner.release();
-    }
+      this.warrantClaimModel.create(warrantyClaim);
+    });
 
     return { ...this.response, message: 'Successfully creating warranty claim' };
   }
 
   async findAll() {
-    const result = await this.warrantyClaimsRepository.find();
+    const result = await this.warrantClaimModel.find().populate('product').populate('user');
 
     return { ...this.response, data: result };
   }
 
-  async findOne(id: number) {
-    const result = await this.warrantyClaimsRepository.findOne({ where: { id } });
+  async findOne(id: string) {
+    const result = await this.warrantClaimModel.findOne({ _id: id }).populate('product').populate('user');
 
     return { ...this.response, data: result };
   }
 
-  async update(id: number, updateWarrantClaimDto: UpdateWarrantyClaimDto) {
-    const queryRunner = this.dataSource.createQueryRunner();
+  async findAllMine() {
+    const result = await this.warrantClaimModel
+      .find({
+        user: new mongoose.Types.ObjectId(RequestContext.currentContext.req.user.userId),
+      })
+      .populate('product')
+      .populate('user');
 
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    return { ...this.response, data: result };
+  }
 
-    try {
-      await queryRunner.manager.update(WarrantyClaim, id, updateWarrantClaimDto);
+  async findOneMine(id: string) {
+    const result = await this.warrantClaimModel
+      .findOne({
+        user: new mongoose.Types.ObjectId(RequestContext.currentContext.req.user.userId),
+        _id: new mongoose.Types.ObjectId(id),
+      })
+      .populate('product')
+      .populate('user');
 
-      await queryRunner.commitTransaction();
-    } catch (error) {
-      await queryRunner.rollbackTransaction();
+    return { ...this.response, data: result };
+  }
 
-      return new UnprocessableEntityException(error);
-    } finally {
-      await queryRunner.release();
-    }
+  async update(id: string, updateWarrantClaimDto: UpdateWarrantyClaimDto) {
+    const session = await this.connection.startSession();
+
+    await session.withTransaction(async () => {
+      await this.warrantClaimModel.findOneAndUpdate({ _id: new mongoose.Types.ObjectId(id) }, updateWarrantClaimDto);
+    });
 
     return { ...this.response, message: 'Successfully updating a warranty claim' };
   }
 
-  remove(id: number) {
-    this.warrantyClaimsRepository.delete(id);
+  async remove(id: string) {
+    await this.warrantClaimModel.deleteOne({ _id: id });
 
     return { ...this.response, message: 'Successfully deleting a warranty claim' };
   }

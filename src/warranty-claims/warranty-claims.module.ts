@@ -1,13 +1,19 @@
 import { Module } from '@nestjs/common';
 import { WarrantyClaimsService } from './warranty-claims.service';
 import { WarrantyClaimsController } from './warranty-claims.controller';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { WarrantyClaim } from './entities/warranty-claim.entity';
-import { User } from 'src/users/entities/user.entity';
-import { Product } from 'src/products/entities/product.entity';
+import { MongooseModule } from '@nestjs/mongoose';
+import { User, UserSchema } from 'src/users/schemas/user.schema';
+import { WarrantyClaim, WarrantyClaimSchema } from './schemas/warranty-claim.schema';
+import { Product, ProductSchema } from 'src/products/schemas/product.schema';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([WarrantyClaim, User, Product])],
+  imports: [
+    MongooseModule.forFeature([
+      { name: User.name, schema: UserSchema },
+      { name: WarrantyClaim.name, schema: WarrantyClaimSchema },
+      { name: Product.name, schema: ProductSchema },
+    ]),
+  ],
   controllers: [WarrantyClaimsController],
   providers: [WarrantyClaimsService],
 })
