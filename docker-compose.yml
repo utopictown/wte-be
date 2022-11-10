@@ -1,0 +1,25 @@
+services:
+  wte-api:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    ports:
+      - "5001:3000"
+    container_name: wte-api
+    links:
+      - mongo
+    networks:
+      - backnet
+    env_file:
+      - .env
+  mongo:
+    image: mongo
+    ports:
+      - "27017:27017"
+    container_name: mongo
+    volumes:
+     - ./db/:/data/db
+    networks:
+      - backnet
+networks:
+  backnet:
